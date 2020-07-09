@@ -55,6 +55,9 @@ data=[('IU', 'ANMO', '', 'LHZ'),('IU', 'ANMO', '', 'LH1'),('IU', 'ANMO', '', 'LH
       ('IU', 'ADK', '', 'LHZ'),('IU', 'ADK', '', 'LH1'),('IU', 'ADK', '', 'LH2'),
       ('IU', 'COR', '', 'LHZ'),('IU', 'COR', '', 'LH1'),('IU', 'COR', '', 'LH2'),
       ('IU', 'COLA', '', 'LHZ'),('IU', 'COLA', '', 'LH1'),('IU', 'COLA', '', 'LH2')]
+data=[('MN', 'AQU', '', 'BHE'),('MN', 'AQU', '', 'BHN'),('MN', 'AQU', '', 'BHZ')]
+data=[('MN', 'AQU', '', 'BHE')
+      ]
 sftp=ssh_client.open_sftp()
 
 def sftpExist(p,path):
@@ -90,7 +93,7 @@ def drum(st,tEnd,hyst,band,b):
     sftpMkdirs(sftp, p, 'uploads')
     sftpMkdirs(sftp, '/RT/', 'uploads')
 
-    traces = client.get_waveforms(network, station, "00", channel, tStart, tEnd)
+    traces = client.get_waveforms(network, station, "*", channel, tStart, tEnd)
     for tr in traces:
         trId = tr.get_id()
 
@@ -98,7 +101,7 @@ def drum(st,tEnd,hyst,band,b):
         fileNameRT='RT_'+ network + '_' + station + '_' + channel + '_' + str(b)+'.png'
 
         tr.filter('bandpass',freqmin=band[0],freqmax=band[1],corners=2,zerophase=True)
-        imM=tr.plot(type='dayplot',
+        tr.plot(type='dayplot',
                 dpi=dpi,
                 x_labels_size=int(8 * 100 / int(dpi)),
                 y_labels_size=int(8 * 100 / int(dpi)),
@@ -106,42 +109,44 @@ def drum(st,tEnd,hyst,band,b):
                 size=(sizex, sizey),
                 color=('#AF0000', '#00AF00', '#0000AF'),
                 #transparent=True,
-                handle=True
+                #handle=True
                 # bgcolor='black',
                 # grid_color='white',
                 # face_color='black',+
                 # show_y_UTC_label=False,
-                #outfile='tmpmpl.png'
+                outfile='tmpmpl.png'
                 )
-        canvas = FigureCanvasAgg(imM)
-        canvas.draw()
-        X = numpy.array(canvas.renderer.buffer_rgba())
-        #i.savefig('tmpmpl.png')
-        #im = Image.open('tmpmpl.png')
-        Image.fromarray(np.fromstring(imM.canvas.tostring_rgb(), dtype=np.uint8).reshape(lst)).convert('P', palette=Image.AFFINE).save('tmp.png', format='PNG',optimization=True)
+        im = Image.open('tmpmpl.png')
+        #Image.fromarray(numpy.fromstring(imM.canvas.tostring_rgb(), dtype=numpy.uint8).reshape(lst)).convert('P', palette=Image.AFFINE).save('tmp.png', format='PNG',optimization=True)
   #      Image.fromarray(X,'RGBA').convert('P', palette=Image.AFFINE).save('tmp.png', format='PNG',optimization=True)
-   #     im.convert('RGBA').convert('P', palette=Image.AFFINE).save('tmp.png', format='PNG',optimization=True)
+        im.convert('RGBA').convert('P', palette=Image.AFFINE).save('tmp.png', format='PNG',optimization=True)
         print(fileNameRT+' '+fileName)
         return (fileName,fileNameRT)
 
 tOld=UTCDateTime.now()
+test=True
 while 1<2:
     time.sleep(1)
     tEnd = UTCDateTime.now()
     print(tEnd.strftime("%Y%m%d%H%M%S"))
-    if (tEnd.minute %5 ==0) & (tOld.minute %5 !=0):
+    if test:
         for st in data:
             for b in band:
                 (fileName,fileNameRT) = drum(st, tEnd, rTWindow, band[b],b)
-                sftp.put('tmp.png', 'uploads/RT/' + fileNameRT)
+    else:
+        if (tEnd.minute %5 ==0) & (tOld.minute %5 !=0):
+            for st in data:
+                for b in band:
+                    (fileName,fileNameRT) = drum(st, tEnd, rTWindow, band[b],b)
+            #    sftp.put('tmp.png', 'uploads/RT/' + fileNameRT)
 
 
-    if (tEnd.minute==0) & (tOld.minute !=0):
-        for hyst in hystType:
-            if tEnd.hour % int(hyst/60)==0:
-                for st in data:
-                    for b in band:
-                        (fileName,fileNameRT)=drum(st,tEnd,hyst,band[b], b)
-                        sftp.put('tmp.png', 'uploads/' + fileName)
+        if (tEnd.minute==0) & (tOld.minute !=0):
+            for hyst in hystType:
+                if tEnd.hour % int(hyst/60)==0:
+                    for st in data:
+                        for b in band:
+                            (fileName,fileNameRT)=drum(st,tEnd,hyst,band[b], b)
+                 #           sftp.put('tmp.png', 'uploads/' + fileName)
 
     tOld=tEnd
