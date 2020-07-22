@@ -12,7 +12,7 @@ from obspy.core.stream import Stream
 from obspy import read
 from obspy.clients.filesystem.sds import Client
 import matplotlib.pyplot as plt
-
+import sys
 plt.switch_backend('agg')
 from obspy import read_inventory
 
@@ -330,6 +330,12 @@ class drumPlot(Client):
 
         self._lastData = self._tNow
 
+    def expt(self,start,end,st,ch):
+
+        tr = client.get_waveforms('LK', st, '', ch, UTCDateTime.strptime(start,"%Y%m%dT%H%M%S"), UTCDateTime.strptime(end,"%Y%m%dT%H%M%S"))
+        tr.remove_response(self._inv)
+        tr.write('../../../../mnt/ide/traces.mseed')
+
 
 def sftpExist(p, path):
     try:
@@ -356,4 +362,13 @@ def sftpMkdirs(p, path, basePath):
 client = drumPlot('/mnt/ide/seed/')
 # client.select_stream('LK', 'BRK?', 'E??')
 # client.align()
-client.run('LK', 'BRK?', 'E??')
+start=sys.argv[1]
+end=sys.argv[2]
+#st=sys.argv[3]
+#ch=sys.argv[4]
+#client.run('LK', 'BRK?', 'E??')
+st='BRK?'
+ch='E??'
+print (start)
+print(end)
+client.expt(start,end,st,ch)

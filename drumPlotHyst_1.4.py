@@ -1,5 +1,5 @@
 # start 10.30
-
+#!pippo2010
 # sudo ./slarchive -v -SDS /mnt/ide/seed/ -x statefile -S LK_BRK?:EH? 172.16.8.10:18000
 
 # openvpn --config clientBRASKEM__GEOAPP.con
@@ -19,6 +19,8 @@ from obspy import read_inventory
 from threading import Thread
 
 import json
+from json import encoder
+
 
 import time
 import paramiko
@@ -64,31 +66,6 @@ class drumPlot(Client):
     _status = {}
     _elab = {}
     _elabHyst={}
-
-    def statusCalc(self):
-        for tr in self._traces:
-            id = tr.get_id()
-            l = int(UTCDateTime.now() - tr.stats['endtime'])
-            station = id.split('.')[1]
-            self._status[station] = {}
-            self._status[station]["Noise Level"] = "---"
-            self._status[station]["Latency"] = str(l) + 's'
-            self._status[station]["Voltage"] = "---"
-            self._status[station]["Color"] = "#FF0000"
-        with open('geophone_network_status.json', 'w') as fp:
-            json.dump(self._status, fp)
-            fp.close()
-        sftp.put('geophone_network_status.json', 'uploads/RT/' + 'geophone_network_status.json')
-
-    def singleStatusCalc(self, tr):
-        id = tr.get_id()
-        station = id.split('.')[1]
-        l = int(UTCDateTime.now() - tr.stats['endtime'])
-        self._status[station] = {}
-        self._status[station]["Noise Level"] = "---"
-        self._status[station]["Latency"] = str(l) + 's'
-        self._status[station]["Voltage"] = "---"
-        self._status[station]["Color"] = "#FF0000"
 
     def plotDrum(self, trace, filename='tmp.png'):
         print(trace.get_id())
@@ -202,66 +179,87 @@ class drumPlot(Client):
             self._elabHyst[e]={}
 
     def elab(self):
-        print('tremorStart ' + UTCDateTime.now().strftime("%Y%m%d %H%M%S"))
+
         s = np.asarray(self.get_all_nslc())
         appTrace = Stream()
         stTrace = Stream()
         self._elRunning = True
         for network in np.unique(s[:, 0]):
             for station in np.unique(s[:, 1]):
-
-                stTrace = self._traces.select(network, station)
-                elab = {
-                    'ts': np.long(self._tEnd.strftime("%Y%m%d%H%M%S"))
-
-                }
-                # TREMOR
-                for tr in stTrace:
-                    rms = {}
-                    id = tr.get_id()
-                    spl = id.split('.')
-                    channel = spl[3]
-                    elab[channel] = {}
-                    tStart = self._tEnd - 60
-                    appTrace = tr.copy()
-                    appTrace.trim(tStart, self._tEnd)
-                    appTrace.remove_response(self._inv)
-
-                    for b in band:
-                        bb = band[b]
-                        trF = appTrace.copy()
-                        trF.filter('bandpass', freqmin=bb[0], freqmax=bb[1], corners=2, zerophase=True)
-                        rms[b] = np.sqrt(np.mean(trF.data ** 2))
-                        # print(id+' '+str(b)+' '+str(rms))
-                        elab[channel]['rms_' + b] = rms[b]
-                nTr=network + '_' + station
                 try:
-                    self._elab[nTr][elab['ts']]=elab
-                    self._elabHyst[nTr][elab['ts']] = elab
+                    print('elab ' + station)
+                    stTrace = self._traces.select(network, station)
+                    elab = {
+                        'ts': np.long(self._tEnd.strftime("%Y%m%d%H%M%S"))
+
+                    }
+                    # TREMOR
+                    nTr = network + '_' + station
+                    f = self.elabWhere(nTr, (self._tEnd - 3600).strftime("%Y%m%d%H%M%S"), self._tEnd.strftime("%Y%m%d%H%M%S"))
+                    for tr in stTrace:
+                        rms = {}
+                        id = tr.get_id()
+                        spl = id.split('.')
+                        channel = spl[3]
+                        elab[channel] = {}
+                        tStart = self._tEnd - 60
+                        appTrace = tr.copy()
+                        appTrace.trim(tStart, self._tEnd)
+                        appTrace.remove_response(self._inv)
+
+                        for b in band:
+                            bb = band[b]
+                            trF = appTrace.copy()
+                            trF.filter('bandpass', freqmin=bb[0], freqmax=bb[1], corners=2, zerophase=True)
+                            rms[b] = np.sqrt(np.mean(trF.data ** 2))
+                            elab[channel]['rms_' + b] = str("%0.2e"%rms[b])
+                            HC_rms=np.sum([float(s[channel]['rms_' + b]) for s in f])
+                            elab[channel]['HC_rms_' + b]=str("%0.2e"%HC_rms)
+
+                    try:
+                        self._elab[nTr][elab['ts']] = elab
+                        self._elabHyst[nTr][elab['ts']] = elab
+                    except:
+                        self._elab[nTr] = {}
+                        self._elab[nTr][elab['ts']] = elab
+                        self._elabHyst[nTr] = {}
+                        self._elabHyst[nTr][elab['ts']] = elab
+
+
+                    # pulisco e slavo
+                    m = np.long((self._tEnd - 1440 * 60).strftime("%Y%m%d%H%M%S"))
+                    mm = np.min(list(self._elab[nTr].keys()))
+                    if mm < m:
+                        self._elab[nTr].pop(mm)
+                    for e in self._elab:
+                        filename = basePath + 'RT/ELAB_' + e + '.json'
+
+                        with open(filename, 'w') as fp:
+                            json.dump(list(self._elab[e].values()), fp)
+                            fp.close()
                 except:
-                    self._elab[nTr]={}
-                    self._elab[nTr][elab['ts']] = elab
-                    self._elabHyst[nTr] = {}
-                    self._elabHyst[nTr][elab['ts']] = elab
+                    print('failed elab in '+station)
+                    pass
 
-                #pulisco e slavo
-                m=np.long((self._tEnd-1440*60).strftime("%Y%m%d%H%M%S"))
-                mm=np.min(list(self._elab[nTr].keys()))
-                if mm<m:
-                    self._elab[nTr].pop(mm)
-                for e in self._elab:
-                    filename = basePath + 'RT/ELAB_' + e + '.json'
-
-                    with open(filename, 'w') as fp:
-                        json.dump(list(self._elab[e].values()), fp)
-                        fp.close()
-        #np.savez('elSave',h=self._elabHyst,e=self._elab)
+        np.savez('elSave',h=self._elabHyst,e=self._elab)
         self._elRunning = False
+
+    def elabWhere(self,id,ts,te):
+        r=[]
+        ts=np.long(ts)
+        te=np.long(te)
+        for x in (y for y in self._elab[id].keys() if (y > ts) & (y < te)):
+            r.append(self._elab[id][x])
+        return r
+
+    #np.sum([s['EHE']['rms_low'] for s in f])
 
     def run(self, network, station, channel):
         r=False
         try:
             data=np.load('elSave.npz')
+            self._elab=data['e'].tolist()
+            self._elabHyst=data['h'].tolist()
         except:
             pass
 
@@ -271,9 +269,13 @@ class drumPlot(Client):
             print(self._tNow)
             if self._tNow.second < self._lastData.second:
                 self._tEnd = self._tNow
-                self._traces = self.get_waveforms(network, station, '', channel, self._tEnd - 720 * 60,
-                                                  UTCDateTime.now())
-                print(self._traces)
+                print('getting traces')
+                try:
+                    self._traces = self.get_waveforms(network, station, '', channel, self._tEnd - 720 * 60,
+                                                      UTCDateTime.now())
+                    self._traces.merge(fill_value=0)
+                except:
+                    print('failed to get traces')
 
                 if not self._elRunning:
                     elThread = Thread(target=self.elab)
@@ -296,39 +298,7 @@ class drumPlot(Client):
 
             self._lastData = self._tNow
 
-    def on_data(self, traces):
 
-        self._tNow = UTCDateTime.now()
-        print(self._tNow)
-
-        # traces.remove_response(self._inv)
-        # self._traces += traces
-        # self._traces.merge(fill_value=0)
-        # if (self._tEnd.minute != self._lastData.minute):
-        #     if not self._trRunning:
-        #         trThread = Thread(target=self.tremor)
-        #         trThread.start()
-
-        if (self._tNow.minute % self._rtSft == 0) & (self._lastData.minute % self._rtSft != 0):
-            self._tEnd = self._tNow
-            self._traces.trim(self._tEnd - 720 * 60, self._tNow)
-            print(self._traces)
-            if not self._rtRunning:
-                rtThread = Thread(target=self.realTimeDrumPlot)
-                rtThread.start()
-            if not self._saving:
-                sThread = Thread(target=self.save)
-                sThread.start()
-
-        if (self._tEnd.minute == 0) & (self._lastData.minute != 0):
-            self._tEnd = self._tNow
-
-            if not self._hyRunning:
-                hyThread = Thread(target=self.hystDrumPlot)
-                hyThread.start()
-        #     # self.hystDrumPlot()
-
-        self._lastData = self._tNow
 
 
 def sftpExist(p, path):
