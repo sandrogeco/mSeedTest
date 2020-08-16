@@ -6,8 +6,8 @@ from obspy.core.stream import Stream
 from obspy import read
 from obspy.clients.filesystem.sds import Client
 import matplotlib.pyplot as plt
-
-
+import multiprocessing
+import obspy.signal.polarization
 from obspy import read_inventory
 
 from threading import Thread
@@ -29,10 +29,8 @@ sizex = 800
 sizey = 600
 yRange = 0.1
 
-hystType = [1440, 360, 180, 60]
+hystType = [360, 180, 60]
 
-basePath = '/home/geoapp/'
-basePathRT = '/mnt/geoAppServer/' # '/home/sandro/Documents/mSeedTest/'#'#
 band = {
     'low': [1, 20],
     'high': [20, 50]
@@ -41,13 +39,59 @@ band = {
 rTWindow = 360
 rtSft = 2
 
+class alert():
+    _a={
+        'id_alert':'',
+        'utc_time':'',
+        'utc_time_str':'',
+        'event_type':'',
+        'station':'',
+        'channel':'',
+        'amplitude':'',
+        'linearity':'',
+        'az':'',
+        'tkoff':'',
+        'freq':'',
+        'lat':'',
+        'lon':'',
+        'note':''
+    }
+    _table='seismic.alerts'
+
+    def insert(self,clause=''):
+        connection = psycopg2.connect(host='80.211.98.179', port='5432', user='maceio',
+                                      password='Bebedouro77627')
+        sql="INSERT INTO "+self._table+" (".join(str(s)+"," for s in self._a.keys())
+        sql=sql[0:-1]
+        sql+=") VALUES (".join(str(s)+"," for s in self._a.values())
+        sql = sql[0:-1]
+        sql+=") " +clause+" ;"
+        connection.cursor().execute(sql)
+        connection.commit()
+        connection.close()
+
+
+    def getLastSta(self,station,evType):
+        connection = psycopg2.connect(host='80.211.98.179', port='5432', user='maceio',
+                                      password='Bebedouro77627')
+        sql="SELECT max(utc_time) from "+self._table+" WHERE station="+station+" AND event_type="+evType+" ;"
+        cursor = connection.cursor()
+        cursor.execute(sql)
+        p = cursor.fetchall()
+        connection.close()
+        return p[0]
+
+
 class drumPlot(Client):
+
+
     _file = 'tr.mseed'  # 'traces.mseed'
     _traces = Stream()
     _inv = read_inventory("metadata/Braskem_metadata.xml")
     _rtSft = rtSft
     _lastData = UTCDateTime.now()
     _traces = Stream()
+    _2minRTraces=Stream()
     _appTrace = Stream()
     _drTrace = Stream()
     _drHTrace = Stream()
@@ -62,6 +106,15 @@ class drumPlot(Client):
     _elab = {}
     _elabHyst={}
     _events = []
+    _polAn={
+        'polWinLen':3,
+        'polWinFr':.1,
+        'fLow':4,
+        'fHigh':12,
+        'plTh':0.7
+    }
+    _polAnResult=[]
+
 
 
 
@@ -70,8 +123,12 @@ class drumPlot(Client):
         print(trace.get_id())
         try:
             trace.data = trace.data * 1000 / 3.650539e+08
+            #im,ax=plt.subplots()
+            if not os.path.exists(os.path.dirname(filename)):
+                os.makedirs(os.path.dirname(filename))
 
-            im = trace.plot(type='dayplot',
+            #im=
+            trace.plot(type='dayplot',
                             dpi=dpi,
                             x_labels_size=int(8 * 100 / int(dpi)),
                             y_labels_size=int(8 * 100 / int(dpi)),
@@ -80,15 +137,14 @@ class drumPlot(Client):
                             size=(sizex, sizey),
                             color=('#AF0000', '#00AF00', '#0000AF'),
                             vertical_scaling_range=yRange,
-                            handle=True,
+                            outfile=filename,
+                            #handle=True,
                             time_offset=-3,
                             data_unit='mm/s',
                             events=self._events
                             )
-            if not os.path.exists(os.path.dirname(filename)):
-                os.makedirs(os.path.dirname(filename))
-            im.savefig(filename)
-            plt.close(im)
+#            im.savefig(filename)
+#            plt.close(im)
 
             return True
         except:
@@ -118,20 +174,24 @@ class drumPlot(Client):
                 bb = band[b]
                 appTrace.trim(self._tEnd - self._rTWindow * 60, self._tEnd, pad=True, fill_value=0)
                 appTrace.filter('bandpass', freqmin=bb[0], freqmax=bb[1], corners=2, zerophase=True)
-                self.plotDrum(appTrace, basePathRT + 'RT/' + fileNameRT)
+                self.plotDrum(appTrace, self._basePathRT + 'RT/' + fileNameRT)
 
-        with open(basePathRT + 'RT/geophone_network_status.json', 'w') as fp:
+        with open(self._basePathRT + 'RT/geophone_network_status.json', 'w') as fp:
             json.dump(self._status, fp)
             fp.close()
 
         print('end ' + UTCDateTime.now().strftime("%Y%m%d %H%M%S"))
         self._rtRunning = False
 
-    def hystDrumPlot(self):
-        print('Hyststart ' + UTCDateTime.now().strftime("%Y%m%d %H%M%S"))
+    def hystDrumPlot(self,tEnd=0):
+
         appTrace = Stream()
         self._hyRunning = True
-
+        if tEnd==0:
+            tEnd=self._tEnd
+        else:
+            self._tEnd=tEnd
+        print('Hyststart ' + tEnd.strftime("%Y%m%d %H%M%S"))
         for tr in self._traces:
             id = tr.get_id()
             # print('hyst '+id)
@@ -142,9 +202,9 @@ class drumPlot(Client):
 
             for h in hystType:
 
-                if self._tEnd.hour % int(h / 60) == 0:
+                if tEnd.hour % int(h / 60) == 0:
                     for b in band:
-                        tStart = self._tEnd - h * 60
+                        tStart = tEnd - h * 60
                         p = network + '/' + station + '/' + channel + '/' + str(tStart.year) + '/' + str(
                             tStart.month) + '/' + str(
                             tStart.day) + '/' + str(h) + '/' + str(b)
@@ -154,11 +214,11 @@ class drumPlot(Client):
 
                         appTrace = tr.copy()
                         bb = band[b]
-                        appTrace.trim(tStart, self._tEnd, pad=True, fill_value=0)
+                        appTrace.trim(tStart, tEnd, pad=True, fill_value=0)
                         appTrace.filter('bandpass', freqmin=bb[0], freqmax=bb[1], corners=2, zerophase=True)
-                        self.plotDrum(appTrace, basePath + fileName)
+                        self.plotDrum(appTrace, self._basePath + fileName)
 
-        print('Hystend ' + UTCDateTime.now().strftime("%Y%m%d %H%M%S"))
+
         self._hyRunning = False
 
     def hystElab(self):
@@ -167,7 +227,7 @@ class drumPlot(Client):
             p = e.split('_')
             network = p[0]
             station = p[1]
-            p = basePath + network + '/' + station + '/' + 'ELAB' + '/' + str(tStart.year) + '/' + str(
+            p = self._basePath + network + '/' + station + '/' + 'ELAB' + '/' + str(tStart.year) + '/' + str(
                 tStart.month) + '/' + str(
                 tStart.day) + '/'+tStart.strftime("%Y%m%d%H")+ '00.json'#ELAB_' + e + '.json'
             if not os.path.exists(os.path.dirname(p)):
@@ -179,87 +239,152 @@ class drumPlot(Client):
             self._elabHyst[e]={}
 
     def elab(self):
-
-        s = np.asarray(self.get_all_nslc())
-        appTrace = Stream()
-        stTrace = Stream()
         self._elRunning = True
+
+        self._2minRTraces = self._traces.copy()
+        self._2minRTraces.trim(self._tEnd-120, self._tEnd)
+        self._2minRTraces.remove_response(self._inv)
+
+        tStart = self._tEnd - 60
+        s = np.asarray(self.get_all_nslc())
+
+        intTrace=self._2minRTraces.copy()
+        intTrace.trim(tStart, self._tEnd)
+
         for network in np.unique(s[:, 0]):
             for station in np.unique(s[:, 1]):
+                print('elab ' + station)
+                stTrace = intTrace.select(network, station)
+                elab = {
+                    'ts': np.long(self._tEnd.strftime("%Y%m%d%H%M%S"))
+
+                }
+                # TREMOR
+                nTr = network + '_' + station
+                # f = self.elabWhere(nTr, (self._tEnd - 3600).strftime("%Y%m%d%H%M%S"),
+                #                    self._tEnd.strftime("%Y%m%d%H%M%S"))
+                for appTrace in stTrace:
+                    rms = {}
+                    id = appTrace.get_id()
+                    spl = id.split('.')
+                    channel = spl[3]
+                    elab[channel] = {}
+                    # tStart = self._tEnd - 60
+                    # appTrace = tr.copy()
+                    # appTrace.trim(tStart, self._tEnd)
+                    # appTrace.remove_response(self._inv)
+
+                    for b in band:
+                        bb = band[b]
+                        trF = appTrace.copy()
+                        trF.filter('bandpass', freqmin=bb[0], freqmax=bb[1], corners=2, zerophase=True)
+                        rms[b] = np.sqrt(np.mean(trF.data ** 2))
+                        elab[channel]['rms_' + b] = str("%0.2e" % rms[b])
+                        # HC_rms = np.sum([float(s[channel]['rms_' + b]) for s in f])
+                        # elab[channel]['HC_rms_' + b] = str("%0.2e" % HC_rms)
+
                 try:
-                    print('elab ' + station)
-                    stTrace = self._traces.select(network, station)
-                    elab = {
-                        'ts': np.long(self._tEnd.strftime("%Y%m%d%H%M%S"))
-
-                    }
-                    # TREMOR
-                    nTr = network + '_' + station
-                    f = self.elabWhere(nTr, (self._tEnd - 3600).strftime("%Y%m%d%H%M%S"), self._tEnd.strftime("%Y%m%d%H%M%S"))
-                    for tr in stTrace:
-                        rms = {}
-                        id = tr.get_id()
-                        spl = id.split('.')
-                        channel = spl[3]
-                        elab[channel] = {}
-                        tStart = self._tEnd - 60
-                        appTrace = tr.copy()
-                        appTrace.trim(tStart, self._tEnd)
-                        appTrace.remove_response(self._inv)
-
-                        for b in band:
-                            bb = band[b]
-                            trF = appTrace.copy()
-                            trF.filter('bandpass', freqmin=bb[0], freqmax=bb[1], corners=2, zerophase=True)
-                            rms[b] = np.sqrt(np.mean(trF.data ** 2))
-                            elab[channel]['rms_' + b] = str("%0.2e"%rms[b])
-                            HC_rms=np.sum([float(s[channel]['rms_' + b]) for s in f])
-                            elab[channel]['HC_rms_' + b]=str("%0.2e"%HC_rms)
-
-                    try:
-                        self._elab[nTr][elab['ts']] = elab
-                        self._elabHyst[nTr][elab['ts']] = elab
-                    except:
-                        self._elab[nTr] = {}
-                        self._elab[nTr][elab['ts']] = elab
-                        self._elabHyst[nTr] = {}
-                        self._elabHyst[nTr][elab['ts']] = elab
-
-
-                    # pulisco e slavo
-                    m = np.long((self._tEnd - 1440 * 60).strftime("%Y%m%d%H%M%S"))
-                    mm = np.min(list(self._elab[nTr].keys()))
-                    if mm < m:
-                        self._elab[nTr].pop(mm)
-                    for e in self._elab:
-                        filename = basePathRT + 'RT/ELAB_' + e + '.json'
-
-                        with open(filename, 'w') as fp:
-                            json.dump(list(self._elab[e].values()), fp)
-                            fp.close()
-
+                    self._elab[nTr][elab['ts']] = elab
+                    self._elabHyst[nTr][elab['ts']] = elab
                 except:
-                    print('failed elab in '+station)
-                    pass
+                    self._elab[nTr] = {}
+                    self._elab[nTr][elab['ts']] = elab
+                    self._elabHyst[nTr] = {}
+                    self._elabHyst[nTr][elab['ts']] = elab
 
-        np.savez('elSave',h=self._elabHyst,e=self._elab)
+                # pulisco e slavo
+                m = np.long((self._tEnd - 1440 * 60).strftime("%Y%m%d%H%M%S"))
+                mm = np.min(list(self._elab[nTr].keys()))
+                if mm < m:
+                    self._elab[nTr].pop(mm)
+                for e in self._elab:
+                    filename = self._basePathRT + 'RT/ELAB_' + e + '.json'
+
+                    with open(filename, 'w') as fp:
+                        json.dump(list(self._elab[e].values()), fp)
+                        fp.close()
+
+
+                # except:
+                #     print('failed elab in '+station)
+                #     pass
+
+        np.savez(self._basePath+'elSave',h=self._elabHyst,e=self._elab)
         self._elRunning = False
 
     def elabWhere(self,id,ts,te):
         r=[]
         ts=np.long(ts)
         te=np.long(te)
-        for x in (y for y in self._elab[id].keys() if (y > ts) & (y < te)):
-            r.append(self._elab[id][x])
+        try:
+            for x in (y for y in self._elab[id].keys() if (y > ts) & (y < te)):
+                r.append(self._elab[id][x])
+        except:
+            pass
         return r
 
-    def run(self, network, station, channel):
+
+
+    def polAn(self):
+        a=alert()
+        appTrace=self._2minRTraces.copy()
+        ts=self._tEnd-120
+        te=self._tEnd-10
+
+        appTrace.filter('bandpass', freqmin=self._polAn['fLow'], freqmax=self._polAn['fHigh'], corners=2, zerophase=True)
+        s = np.asarray(self.get_all_nslc())
+        for network in np.unique(s[:, 0]):
+            for station in np.unique(s[:, 1]):
+                nTr = network + '_' + station
+                try:
+                    print('polarizzation analisys '+station)
+                    stTrace = appTrace.select(network, station)
+                    u=obspy.signal.polarization.polarization_analysis(
+                        stTrace,self._polAn['polWinLen'],
+                        self._polAn['polWinFr'],
+                        self._polAn['fLow'],
+                        self._polAn['fHigh'],
+                        ts,te,False,'flinn')
+
+                    x=np.where(u['planarity']>self._polAn['plTh'])
+                    ur={k: u[k][x] for k in u.keys()}
+                    for u in ur:
+                        a._a['utc_time']=UTCDateTime(u['timestamp']).strftime("%Y-%m-%d %H:%M:%S")
+                        a._a['utc_time_str'] = UTCDateTime(u['timestamp']).strftime("%Y-%m-%d %H:%M:%S")
+                        a._a['event_type']="PL"
+                        a._a['station']=nTr
+                        a._a['linearity']=u['planarity']
+                        a._a['az']=a['azimuth']
+                        a._a['tkoff']=a['incidence']
+
+                    a._a = {
+                        'id_alert': '',
+                        'utc_time': '',
+                        'utc_time_str': '',
+                        'event_type': '',
+                        'station': '',
+                        'channel': '',
+                        'amplitude': '',
+                        'linearity': '',
+                        'az': '',
+                        'tkoff': '',
+                        'freq': '',
+                        'lat': '',
+                        'lon': '',
+                        'note': ''
+                    }
+                except:
+                    print('polarizzation analisys '+station+ ' failed')
+
+
+    def run(self, network, station, channel,tStart=UTCDateTime.now(),rt=True):
         logging.basicConfig(filename='log.log', level='WARNING',format='%(asctime)s %(message)s')
 
         r=False
+
         try:
 
-            data=np.load('elSave.npz')
+            data=np.load(self._basePath+'elSave.npz')
             self._elab=data['e'].tolist()
             self._elabHyst=data['h'].tolist()
         except:
@@ -274,36 +399,38 @@ class drumPlot(Client):
             'BRK4': self._inv.get_coordinates('LK.BRK4..EHZ'),
         }
 
-        with open(basePathRT+'elab_status.json', 'w') as fp:
+        with open(self._basePathRT+'elab_status.json', 'w') as fp:
             json.dump(self._stationData, fp)
             fp.close()
 
-
+        self._tNow=tStart
         while 1 < 2:
-            time.sleep(5)
-            self._tNow = UTCDateTime.now()
-            print(self._tNow)
+
+            if self._tNow>UTCDateTime.now()-5:
+                time.sleep(5)
+                self._tNow = UTCDateTime.now()
+                print(self._tNow)
+            else:
+                self._tNow += 10
+                if (not rt) & (not self._rtRunning)&(not self._hyRunning)&( not self._saving)& (not self._elRunning):
+
+                    print('sk')
+                    print(self._tNow)
+
+
             if self._tNow.second < self._lastData.second:
                 self._tEnd = self._tNow
 
                 print('getting traces')
                 try:
                     self._traces = self.get_waveforms(network, station, '', channel, self._tEnd - 720 * 60,
-                                                      UTCDateTime.now())
+                                                      self._tEnd)
                     self._traces.merge(fill_value=0)
                 except:
                     print('failed to get traces')
 
-                if not self._elRunning:
-                    elThread = Thread(target=self.elab)
-                    elThread.start()
 
-
-                if self._tNow.hour<self._lastData.hour:
-                    elSave = Thread(target=self.hystElab())
-                    elSave.start()
-
-                if (self._tNow.minute % self._rtSft == 0) & (self._lastData.minute % self._rtSft != 0):
+                if (self._tNow.minute % self._rtSft == 0) & (self._lastData.minute % self._rtSft != 0) & rt:
                     print('getting events')
                     try:
                         self.getCasp()
@@ -317,14 +444,29 @@ class drumPlot(Client):
                         print('push events failed')
                         pass
 
-                    if not self._rtRunning:
-                        rtThread = Thread(target=self.realTimeDrumPlot)
-                        rtThread.start()
+                    if (not self._rtRunning) & rt:
+                        pRt = multiprocessing.Process(target=self.realTimeDrumPlot)
+                        pRt.start()
+
+                if (not self._elRunning):
+                    self.elab()
+                    self.polAn()
 
                 if (self._tEnd.minute == 0) & (self._lastData.minute != 0):
                     if not self._hyRunning:
-                        hyThread = Thread(target=self.hystDrumPlot)
-                        hyThread.start()
+                        pHy = multiprocessing.Process(target=self.hystDrumPlot)
+                        pHy.start()
+
+
+
+                if self._tNow.hour<self._lastData.hour:
+                    self.hystElab()
+
+
+
+
+
+
 
             self._lastData = self._tNow
 
@@ -353,9 +495,22 @@ class drumPlot(Client):
                                       password='Bebedouro77627')
         for e in self._events:
 
-            sql = 'INSERT INTO seismic.events (geom,lat,lon,utc_time,utc_time_str,magnitudo,depth,id_casp) ' \
+            sql = 'INSERT INTO seismic.events_casp (geom,lat,lon,utc_time,utc_time_str,magnitudo,depth,id_casp) ' \
                   "VALUES (ST_GeomFromText('POINT(" + str(e['lon']) + ' ' + str(e['lat']) + ")', 4326),"\
                   + str(e['lat']) + ','+ str(e['lon'])+ ",'"+  str(UTCDateTime(e['time']).strftime("%Y-%m-%d %H:%M:%S"))+ "','"+  str(UTCDateTime(e['time']).strftime("%Y-%m-%d %H:%M:%S"))+"',"+str(e['mag'])+','+ str(e['dpt'])  +','+e['id']+") ON CONFLICT DO NOTHING;"
             connection.cursor().execute(sql)
             connection.commit()
 
+    def pushIntEv(self,e,table='seismic.events_swarm',id='id_swarm'):
+        connection = psycopg2.connect(host='80.211.98.179', port='5432', user='maceio',
+                                      password='Bebedouro77627')
+        #for e in events:
+
+        sql = 'INSERT INTO '+table+ ' (geom,note,lat,lon,utc_time,utc_time_str,magnitudo,depth,'+id+') ' \
+              "VALUES (ST_GeomFromText('POINT(" + str(e['lon']) + ' ' + str(e['lat']) + ")', 4326)" \
+              + ",'" + e['note'] + "'," + str(e['lat']) + ',' + str(e['lon']) + ",'" + str(
+            UTCDateTime(e['time']).strftime("%Y-%m-%d %H:%M:%S")) + "','" + str(
+            UTCDateTime(e['time']).strftime("%Y-%m-%d %H:%M:%S")) + "'," + str(e['mag']) + ',' + str(e['dpt']) + ",'" + \
+              e['id'] + "') ON CONFLICT DO NOTHING;"
+        connection.cursor().execute(sql)
+        connection.commit()
